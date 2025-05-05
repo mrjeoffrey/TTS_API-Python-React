@@ -1,7 +1,8 @@
 
 import os
 import datetime
-from fastapi import APIRouter, HTTPException, Response, BackgroundTasks
+import asyncio
+from fastapi import APIRouter, HTTPException, Response, BackgroundTasks, Request
 from models import TTSRequestModel, TTSResponseModel, JobStatusResponse
 from storage import load_jobs
 from job_management import JobManager, JobStatus, TTSRequest
@@ -49,40 +50,59 @@ async def get_all_jobs():
         raise HTTPException(status_code=500, detail=f"Error getting jobs: {str(e)}")
 
 @router.post("/tts", response_model=TTSResponseModel)
-async def tts_endpoint(request: TTSRequestModel):
-    if not request.text or request.text.strip() == "":
-        raise HTTPException(status_code=400, detail="Text is required")
-
-    job_id = await job_manager.add_job(
-        TTSRequest(
-            text=request.text.strip(),
-            voice=request.voice,
-            pitch=request.pitch,
-            speed=request.speed,
-            volume=request.volume,
-        )
-    )
+async def tts_endpoint(request: TTSRequestModel, req: Request):
+    try:
+        if not request.text or request.text.strip() == "":
+            raise HTTPException(status_code=400, detail="Text is required")
     
-    return TTSResponseModel(job_id=job_id)
+        # Log client information for debugging
+        client_host = req.client.host if req.client else "unknown"
+        user_agent = req.headers.get("user-agent", "unknown")
+        content_length = len(request.text)
+        
+        print(f"TTS request from {client_host} with User-Agent: {user_agent}, content length: {content_length}")
+        
+        job_id = await job_manager.add_job(
+            TTSRequest(
+                text=request.text.strip(),
+                voice=request.voice,
+                pitch=request.pitch,
+                speed=request.speed,
+                volume=request.volume,
+            )
+        )
+        
+        return TTSResponseModel(job_id=job_id)
+    except Exception as e:
+        # Log the exception
+        print(f"Error in /tts endpoint: {str(e)}")
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/tts/status/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     """Check the status of a TTS job"""
-    # First check if the audio file already exists
-    audio_path = os.path.join(AUDIO_DIR, f"{job_id}.mp3")
-    if os.path.exists(audio_path):
-        return JobStatusResponse(job_id=job_id, status="completed", message="Audio is ready")
-    
-    # If not, check the job in memory
-    status = job_manager.get_job_status(job_id)
-    if status is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    try:
+        # First check if the audio file already exists
+        audio_path = os.path.join(AUDIO_DIR, f"{job_id}.mp3")
+        if os.path.exists(audio_path):
+            return JobStatusResponse(job_id=job_id, status="completed", message="Audio is ready")
         
-    return JobStatusResponse(
-        job_id=job_id,
-        status=status.value,
-        message="Audio is being processed" if status == JobStatus.PROCESSING else "Audio is ready"
-    )
+        # If not, check the job in memory
+        status = job_manager.get_job_status(job_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            
+        return JobStatusResponse(
+            job_id=job_id,
+            status=status.value,
+            message="Audio is being processed" if status == JobStatus.PROCESSING else "Audio is ready"
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error checking job status: {str(e)}")
 
 @router.get("/tts/audio/{job_id}")
 async def get_audio(job_id: str):
@@ -139,11 +159,13 @@ async def health_check():
 
         # Get active jobs in the queue
         active_jobs_size = job_manager.get_queue_size() if job_manager else 0
+        memory_jobs_count = len(job_manager.jobs) if job_manager else 0
 
         return {
             "status": "healthy",
             "audio_files_count": audio_files_count,
             "active_jobs_size": active_jobs_size,
+            "memory_jobs_count": memory_jobs_count,
             "message": "System is operational"
         }
     except Exception as e:
@@ -151,5 +173,6 @@ async def health_check():
             "status": "unhealthy",
             "audio_files_count": 0,
             "active_jobs_size": 0,
+            "memory_jobs_count": 0,
             "message": f"Error: {str(e)}"
         }

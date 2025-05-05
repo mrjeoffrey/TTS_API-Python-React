@@ -21,23 +21,35 @@ async def process_tts_request(job_id: str, text: str, voice: str, pitch: str, sp
     volume_percentage = int(float(volume)) - 100
     volume_value = f"+{volume_percentage}%" if volume_percentage >= 0 else f"{volume_percentage}%"
     
-    communicate = edge_tts.Communicate(
-        text=text,
-        voice=voice,
-        rate=rate_value,
-        volume=volume_value,
-        pitch=pitch_value
-    )
-    
-    filename = os.path.join(AUDIO_DIR, f"{job_id}.mp3")
+    # Log the job parameters for debugging
+    logger.info(f"Processing TTS job {job_id}: voice={voice}, text length={len(text)}")
     
     try:
-        await asyncio.wait_for(communicate.save(filename), timeout=60.0)
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice,
+            rate=rate_value,
+            volume=volume_value,
+            pitch=pitch_value
+        )
+        
+        filename = os.path.join(AUDIO_DIR, f"{job_id}.mp3")
+        
+        # Use a shorter timeout to prevent long-running jobs
+        await asyncio.wait_for(communicate.save(filename), timeout=45.0)
         
         if not os.path.exists(filename) or os.path.getsize(filename) == 0:
             raise Exception(f"Failed to generate audio file for job {job_id}")
             
-        logger.info(f"Job {job_id}: TTS conversion saved to {filename} ({os.path.getsize(filename)} bytes)")
+        file_size = os.path.getsize(filename)
+        logger.info(f"Job {job_id}: TTS conversion saved to {filename} ({file_size} bytes)")
+        
+        # Add a small delay to ensure the file is properly written to disk
+        await asyncio.sleep(0.5)
+        
     except asyncio.TimeoutError:
+        logger.error(f"TTS generation timed out for job {job_id}")
         raise Exception(f"TTS generation timed out for job {job_id}")
-
+    except Exception as e:
+        logger.error(f"Error processing TTS for job {job_id}: {str(e)}")
+        raise

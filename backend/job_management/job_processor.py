@@ -26,15 +26,22 @@ class JobProcessor:
         try:
             logger.info(f"Processing job {job_info.job_id}")
             
-            # Process the TTS request
-            await process_tts_request(
-                job_info.job_id,
-                job_info.request.text,
-                job_info.request.voice,
-                job_info.request.pitch,
-                job_info.request.speed,
-                job_info.request.volume
-            )
+            # Process the TTS request with a timeout
+            try:
+                # Process the TTS request
+                await asyncio.wait_for(
+                    process_tts_request(
+                        job_info.job_id,
+                        job_info.request.text,
+                        job_info.request.voice,
+                        job_info.request.pitch,
+                        job_info.request.speed,
+                        job_info.request.volume
+                    ),
+                    timeout=60.0  # Overall timeout for the entire process
+                )
+            except asyncio.TimeoutError:
+                raise Exception(f"TTS processing timed out for job {job_info.job_id}")
             
             job_info.status = JobStatus.COMPLETED
             
@@ -57,6 +64,7 @@ class JobProcessor:
         except Exception as e:
             logger.error(f"Job {job_info.job_id} failed: {e}")
             job_info.status = JobStatus.FAILED
+            job_info.error_message = str(e)
             
             # Send failure notification
             result = JobResult(
