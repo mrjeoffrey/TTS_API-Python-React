@@ -36,9 +36,30 @@ apiClient.interceptors.response.use(
     return response;
   },
   error => {
-    const errorMessage = error.response?.data?.detail || error.message;
-    console.error('API Response Error:', errorMessage);
-    return Promise.reject(error);
+    // Extract the detailed error message if available
+    let errorDetail = error.response?.data?.detail || {};
+    
+    // Handle the case when detail is a string (old format) or an object (new format)
+    const errorMessage = typeof errorDetail === 'object' 
+      ? errorDetail.message || error.message 
+      : errorDetail || error.message;
+
+    // Log the full error information
+    console.error('API Response Error:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      message: errorMessage,
+      detail: errorDetail,
+      trace: typeof errorDetail === 'object' ? errorDetail.traceback : null
+    });
+
+    // Create an enhanced error object to propagate details
+    const enhancedError = new Error(errorMessage);
+    enhancedError.statusCode = error.response?.status;
+    enhancedError.detail = errorDetail;
+    enhancedError.isAxiosError = true;
+
+    return Promise.reject(enhancedError);
   }
 );
 
@@ -49,9 +70,19 @@ export const convertTextToSpeech = async (data) => {
     const response = await apiClient.post('/tts', data);
     return response.data;
   } catch (error) {
-    const message = error.response?.data?.detail || error.message;
-    console.error('TTS conversion error:', message);
-    throw new Error(`TTS conversion failed: ${message}`);
+    console.error('TTS conversion error:', error);
+    
+    // Enrich the error message with more details if available
+    let errorMessage = "TTS conversion failed";
+    if (error.statusCode === 503) {
+      errorMessage = "Server is at capacity. Please try again in a moment.";
+    } else if (error.statusCode === 400) {
+      errorMessage = "Invalid request: " + (error.message || "Please check your inputs");
+    } else {
+      errorMessage = error.message || "Connection issue with TTS service";
+    }
+    
+    throw new Error(errorMessage);
   }
 };
 
@@ -67,8 +98,16 @@ export const fetchTtsAudio = async (jobId) => {
     });
     return response.data;
   } catch (error) {
-    const message = error.response?.data?.detail || error.message;
-    throw new Error(`Failed to fetch audio: ${message}`);
+    console.error('Audio fetch error:', error);
+    
+    // Provide user-friendly error messages based on status code
+    if (error.statusCode === 404) {
+      throw new Error(`Audio not found or still processing. Please try again in a moment.`);
+    } else if (error.statusCode === 422) {
+      throw new Error(`Audio file is incomplete. Please regenerate the audio.`);
+    }
+    
+    throw new Error(`Failed to fetch audio: ${error.message}`);
   }
 };
 
@@ -78,8 +117,8 @@ export const deleteTtsAudio = async (jobId) => {
     const response = await apiClient.delete(`/tts/audio/${jobId}`);
     return response.data;
   } catch (error) {
-    const message = error.response?.data?.detail || error.message;
-    throw new Error(`Failed to delete audio: ${message}`);
+    console.error('Delete audio error:', error);
+    throw new Error(`Failed to delete audio: ${error.message}`);
   }
 };
 
@@ -90,7 +129,18 @@ export const fetchTtsJobs = async () => {
     console.log(`Fetched ${response.data.length} jobs`);
     return response.data;
   } catch (error) {
-    const message = error.response?.data?.detail || error.message;
-    throw new Error(`Failed to fetch jobs: ${message}`);
+    console.error('Fetch jobs error:', error);
+    throw new Error(`Failed to fetch jobs: ${error.message}`);
+  }
+};
+
+// Add a new utility function to check API health
+export const checkApiHealth = async () => {
+  try {
+    const response = await apiClient.get('/health', { timeout: 5000 }); // Short timeout for health check
+    return response.data;
+  } catch (error) {
+    console.error('API health check failed:', error);
+    throw new Error(`API health check failed: ${error.message}`);
   }
 };
